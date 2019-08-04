@@ -9013,7 +9013,7 @@ Perl_yylex(pTHX)
 
   Looks up an identifier in the pad or in a package
 
-  is_sig indicates that this is a subroutine signature variable
+  PL_in_my == KEY_sigvar indicates that this is a subroutine signature variable
   rather than a plain pad var.
 
   Returns:
@@ -11342,10 +11342,12 @@ Perl_scan_num(pTHX_ const char *start, YYSTYPE* lvalp)
                    behaviour, like for: "0x.3" and "0x+$foo".
                 */
                 const char *d = s;
+                char *oldbp = PL_bufptr;
                 if (*d) ++d; /* so the user sees the bad non-digit */
                 PL_bufptr = (char *)d; /* so yyerror reports the context */
                 yyerror(Perl_form(aTHX_ "No digits found for %s literal",
                                   shift == 4 ? "hexadecimal" : "binary"));
+                PL_bufptr = oldbp;
             }
 
 	    if (overflowed) {
@@ -12753,6 +12755,38 @@ Perl_parse_stmtseq(pTHX_ U32 flags)
     if (c != -1 && c != /*{*/'}')
 	qerror(Perl_mess(aTHX_ "Parse error"));
     return stmtseqop;
+}
+
+/*
+=for apidoc parse_subsignature
+
+Parse a subroutine signature declaration. This is the contents of the
+parentheses following a named or anonymous subroutine declaration when the
+C<signatures> feature is enabled. Note that this function neither expects
+nor consumes the opening and closing parentheses around the signature; it
+is the caller's job to handle these.
+
+This function must only be called during parsing of a subroutine; after
+L</start_subparse> has been called. It might allocate lexical variables on
+the pad for the current subroutine.
+
+The op tree to unpack the arguments from the stack at runtime is returned.
+This op tree should appear at the beginning of the compiled function. The
+caller may wish to use L</op_append_list> to build their function body
+after it, or splice it together with the body before calling L</newATTRSUB>.
+
+The C<flags> parameter is reserved for future use, and must always
+be zero.
+
+=cut
+*/
+
+OP *
+Perl_parse_subsignature(pTHX_ U32 flags)
+{
+    if (flags)
+        Perl_croak(aTHX_ "Parsing code internal error (%s)", "parse_subsignature");
+    return parse_recdescent_for_op(GRAMSUBSIGNATURE, LEX_FAKEEOF_NONEXPR);
 }
 
 /*

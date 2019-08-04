@@ -1628,9 +1628,15 @@ This replaces any read-only SV with a fresh SV and removes any magic.
 /* This used to be conditionally defined based on whether we had a sprintf()
  * that correctly returns the string length (as required by C89), but we no
  * longer need that. XS modules can (and do) use this name, so it must remain
- * a part of the API that's visible to modules. But we no longer document it
- * either (because using sprintf() rather than snprintf() is almost always
- * a bad idea). */
+ * a part of the API that's visible to modules.
+
+=for apidoc ATmD|int|my_sprintf|NN char *buffer|NN const char *pat|...
+
+Do NOT use this due to the possibility of overflowing C<buffer>.  Instead use
+my_snprintf()
+
+=cut
+*/
 #define my_sprintf sprintf
 
 /*
@@ -6405,7 +6411,15 @@ argument list, like this:
 
 On threaded perls not operating with thread-safe functionality, this macro uses
 a mutex to force a critical section.  Therefore the matching RESTORE should be
-close by, and guaranteed to be called.
+close by, and guaranteed to be called; see L</WITH_LC_NUMERIC_SET_TO_NEEDED>
+for a more contained way to ensure that.
+
+=for apidoc Am|void|STORE_LC_NUMERIC_SET_TO_NEEDED_IN|bool in_lc_numeric
+
+Same as L</STORE_LC_NUMERIC_SET_TO_NEEDED> with in_lc_numeric provided
+as the precalculated value of C<IN_LC(LC_NUMERIC)>. It is the caller's
+responsibility to ensure that the status of C<PL_compiling> and C<PL_hints>
+cannot have changed since the precalculation.
 
 =for apidoc Am|void|RESTORE_LC_NUMERIC
 
@@ -6425,6 +6439,36 @@ expression, but with an empty argument list, like this:
     RESTORE_LC_NUMERIC();
      ...
  }
+
+=for apidoc Am|void|WITH_LC_NUMERIC_SET_TO_NEEDED
+
+This macro invokes the supplied statement or block within the context
+of a L</STORE_LC_NUMERIC_SET_TO_NEEDED> .. L</RESTORE_LC_NUMERIC> pair
+if required, so eg:
+
+  WITH_LC_NUMERIC_SET_TO_NEEDED(
+    SNPRINTF_G(fv, ebuf, sizeof(ebuf), precis)
+  );
+
+is equivalent to:
+
+  {
+#ifdef USE_LOCALE_NUMERIC
+    DECLARATION_FOR_LC_NUMERIC_MANIPULATION;
+    STORE_LC_NUMERIC_SET_TO_NEEDED();
+#endif
+    SNPRINTF_G(fv, ebuf, sizeof(ebuf), precis);
+#ifdef USE_LOCALE_NUMERIC
+    RESTORE_LC_NUMERIC();
+#endif
+  }
+
+=for apidoc Am|void|WITH_LC_NUMERIC_SET_TO_NEEDED_IN|bool in_lc_numeric
+
+Same as L</WITH_LC_NUMERIC_SET_TO_NEEDED> with in_lc_numeric provided
+as the precalculated value of C<IN_LC(LC_NUMERIC)>. It is the caller's
+responsibility to ensure that the status of C<PL_compiling> and C<PL_hints>
+cannot have changed since the precalculation.
 
 =cut
 
@@ -6453,12 +6497,13 @@ expression, but with an empty argument list, like this:
 #  define DECLARATION_FOR_LC_NUMERIC_MANIPULATION                           \
     void (*_restore_LC_NUMERIC_function)(pTHX) = NULL
 
-#  define STORE_LC_NUMERIC_SET_TO_NEEDED()                                  \
+#  define STORE_LC_NUMERIC_SET_TO_NEEDED_IN(in)                             \
         STMT_START {                                                        \
+            bool _in_lc_numeric = (in);                                     \
             LC_NUMERIC_LOCK(                                                \
-                    (   (  IN_LC(LC_NUMERIC) && _NOT_IN_NUMERIC_UNDERLYING) \
-                     || (! IN_LC(LC_NUMERIC) && _NOT_IN_NUMERIC_STANDARD)));\
-            if (IN_LC(LC_NUMERIC)) {                                        \
+                    (   (  _in_lc_numeric && _NOT_IN_NUMERIC_UNDERLYING)    \
+                     || (! _in_lc_numeric && _NOT_IN_NUMERIC_STANDARD)));   \
+            if (_in_lc_numeric) {                                           \
                 if (_NOT_IN_NUMERIC_UNDERLYING) {                           \
                     Perl_set_numeric_underlying(aTHX);                      \
                     _restore_LC_NUMERIC_function                            \
@@ -6473,6 +6518,9 @@ expression, but with an empty argument list, like this:
                 }                                                           \
             }                                                               \
         } STMT_END
+
+#  define STORE_LC_NUMERIC_SET_TO_NEEDED() \
+        STORE_LC_NUMERIC_SET_TO_NEEDED_IN(IN_LC(LC_NUMERIC))
 
 #  define RESTORE_LC_NUMERIC()                                              \
         STMT_START {                                                        \
@@ -6548,6 +6596,17 @@ expression, but with an empty argument list, like this:
             __FILE__, __LINE__, PL_numeric_standard));                      \
         } STMT_END
 
+#  define WITH_LC_NUMERIC_SET_TO_NEEDED_IN(in_lc_numeric, block)            \
+        STMT_START {                                                        \
+            DECLARATION_FOR_LC_NUMERIC_MANIPULATION;                        \
+            STORE_LC_NUMERIC_SET_TO_NEEDED_IN(in_lc_numeric);               \
+            block;                                                          \
+            RESTORE_LC_NUMERIC();                                           \
+        } STMT_END;
+
+#  define WITH_LC_NUMERIC_SET_TO_NEEDED(block) \
+        WITH_LC_NUMERIC_SET_TO_NEEDED_IN(IN_LC(LC_NUMERIC), block)
+
 #else /* !USE_LOCALE_NUMERIC */
 
 #  define SET_NUMERIC_STANDARD()
@@ -6556,14 +6615,20 @@ expression, but with an empty argument list, like this:
 #  define DECLARATION_FOR_LC_NUMERIC_MANIPULATION
 #  define STORE_LC_NUMERIC_SET_STANDARD()
 #  define STORE_LC_NUMERIC_FORCE_TO_UNDERLYING()
+#  define STORE_LC_NUMERIC_SET_TO_NEEDED_IN(in_lc_numeric)
 #  define STORE_LC_NUMERIC_SET_TO_NEEDED()
 #  define RESTORE_LC_NUMERIC()
 #  define LOCK_LC_NUMERIC_STANDARD()
 #  define UNLOCK_LC_NUMERIC_STANDARD()
+#  define WITH_LC_NUMERIC_SET_TO_NEEDED_IN(in_lc_numeric, block) \
+    STMT_START { block; } STMT_END
+#  define WITH_LC_NUMERIC_SET_TO_NEEDED(block) \
+    STMT_START { block; } STMT_END
 
 #endif /* !USE_LOCALE_NUMERIC */
 
 #define Atof				my_atof
+/* XXX document this , maybe other similar ones*/
 #define Strtod                          my_strtod
 
 #if    defined(HAS_STRTOD)                                          \
